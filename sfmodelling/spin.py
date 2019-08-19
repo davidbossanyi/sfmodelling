@@ -150,6 +150,18 @@ class SpinHamiltonian(object):
         overlap = np.matmul(self.S_state, TTl_eigenstates)
         Cslsq = np.abs(overlap)**2
         return Cslsq
+    
+    def calculate_overlap_semirandom_orientation(self, B, theta, phi):
+        theta_range = np.linspace(0, np.pi, 10)
+        phi_range = np.linspace(0, 2*np.pi, 10)
+        Cslsq = np.zeros(((len(theta_range)**2)*(len(phi_range)**2), 9))
+        index = 0
+        for theta_B in theta_range:
+            for phi_B in phi_range:
+                Cslsq[index, :] = self.calculate_overlap_specific_orientation(B, theta, phi, theta_B, phi_B)
+                index += 1
+        Cslsq = Cslsq.mean(axis=0)
+        return Cslsq
         
     def calculate_overlap_random_orientation(self, B):
         theta_range = np.linspace(0, np.pi, 10)
