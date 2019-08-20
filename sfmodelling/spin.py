@@ -154,7 +154,7 @@ class SpinHamiltonian(object):
     def calculate_overlap_semirandom_orientation(self, B, theta, phi):
         theta_range = np.linspace(0, np.pi, 10)
         phi_range = np.linspace(0, 2*np.pi, 10)
-        Cslsq = np.zeros(((len(theta_range)**2)*(len(phi_range)**2), 9))
+        Cslsq = np.zeros((len(theta_range)*len(phi_range), 9))
         index = 0
         for theta_B in theta_range:
             for phi_B in phi_range:
