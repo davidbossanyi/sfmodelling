@@ -9,6 +9,7 @@ dgbossanyi1@sheffield.ac.uk
 '''
 
 import numpy as np
+import os
 
 
 class SpinHamiltonian(object):
@@ -164,19 +165,23 @@ class SpinHamiltonian(object):
         Cslsq = np.abs(overlap)**2
         return Cslsq
     
-    def calculate_overlap_semirandom_orientation(self, B, alpha, beta, gamma):
-        theta_range = np.linspace(0, np.pi, 10)
-        phi_range = np.linspace(0, 2*np.pi, 10)
+    def calculate_overlap_semirandom_orientation(self, B, alpha, beta, gamma, density=10, tofile=True):
+        theta_range = np.linspace(0, np.pi, density)
+        phi_range = np.linspace(0, 2*np.pi, density)
         Cslsq = np.zeros((len(theta_range)*len(phi_range), 9))
         index = 0
         for theta in theta_range:
             for phi in phi_range:
                 Cslsq[index, :] = self.calculate_overlap_specific_orientation(B, theta, phi, alpha, beta, gamma)
                 index += 1
+        if tofile:
+            if not os.path.exists(os.path.join(os.path.realpath(__file__), '..', '..', 'cslsq')):
+                os.makedirs(os.path.join(os.path.realpath(__file__), '..', '..', 'cslsq'))
+            np.savetxt(os.path.join(os.path.realpath(__file__), '..', '..', 'cslsq', 'semirandom_{0:.4f}mT.csv'.format(B*1000)), Cslsq, delimiter=',')
         Cslsq = Cslsq.mean(axis=0)
         return Cslsq
     
-    def calculate_overlap_random_orientation(self, B, density=10):
+    def calculate_overlap_random_orientation(self, B, density=10, tofile=True):
         theta_range = np.linspace(0, np.pi, density)
         phi_range = np.linspace(0, 2*np.pi, density)
         Cslsq = np.zeros((len(theta_range)**2*len(phi_range)**3, 9))
@@ -188,5 +193,9 @@ class SpinHamiltonian(object):
                         for gamma in phi_range:
                             Cslsq[index, :] = self.calculate_overlap_specific_orientation(B, theta, phi, alpha, beta, gamma)
                             index += 1
+        if tofile:
+            if not os.path.exists(os.path.join(os.path.realpath(__file__), '..', '..', 'cslsq')):
+                os.makedirs(os.path.join(os.path.realpath(__file__), '..', '..', 'cslsq'))
+            np.savetxt(os.path.join(os.path.realpath(__file__), '..', '..', 'cslsq', 'random_{0:.4f}mT.csv'.format(B*1000)), Cslsq, delimiter=',')
         Cslsq = Cslsq.mean(axis=0)
         return Cslsq
