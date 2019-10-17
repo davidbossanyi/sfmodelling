@@ -53,8 +53,8 @@ cslsq = sh.calculate_overlap_specific_orientation(0, 0, 0, *euler_angles)
 for i, ied in enumerate(ieds):
     model.GS_0 = ied
     model.simulate(cslsq)
-    t, S1 = model.normalise_population_at(model.S1, t_norm)
-    simulations[ied] = (t, S1)
+    S1, factor = model.normalise_population_at(model.S1, t_norm)
+    simulations[ied] = (model.t, S1)
 
 
 # plot the results        
@@ -65,4 +65,6 @@ for i, ied in enumerate(ieds):
 axes.legend(frameon=False)
 axes.set_ylabel('singlet population (norm.)')
 axes.set_xlabel('time (ns)')
+axes.set_xlim([1, 1e5])
+axes.set_ylim([1e-5, 2])
 
