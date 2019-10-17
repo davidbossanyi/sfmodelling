@@ -3,8 +3,8 @@ Contains classes for simulating excited state dynamics of singlet fission
 systems. So far, there are 3 classes: Merrifield, Bardeen and a kind of
 combination of the two MerrifieldBardeen.
 
-Version 1.0
-David Bossanyi 12/08/2019
+Version 1.1
+David Bossanyi 17/10/2019
 dgbossanyi1@sheffield.ac.uk
 '''
 
@@ -110,7 +110,7 @@ class Merrifield(object):
         plt.ylabel(r'population (cm$^{-3}$)')
         plt.legend()
         plt.xlim([1e-4, 1e5])
-        plt.ylim([1e10, 1e19])
+        plt.ylim([1e-8, 1e1])
         return fig
     
     def _integrate_populations(self):
@@ -142,10 +142,9 @@ class Merrifield(object):
     
     def normalise_population_at(self, species, t):
         idx = np.where((self.t-t)**2 == min((self.t-t)**2))[0][0]
-        newt = self.t[idx:]
-        species = species[idx:]
-        species = species/species[0]
-        return newt, species
+        factor = species[idx]
+        species = species/factor
+        return species, factor
         
         
 
@@ -285,10 +284,9 @@ class Bardeen(object):
     
     def normalise_population_at(self, species, t):
         idx = np.where((self.t-t)**2 == min((self.t-t)**2))[0][0]
-        newt = self.t[idx:]
-        species = species[idx:]
-        species = species/species[0]
-        return newt, species
+        factor = species[idx]
+        species = species/factor
+        return species, factor
     
     
 class MerrifieldBardeen(object):
@@ -319,6 +317,7 @@ class MerrifieldBardeen(object):
         self.kTNR = 1e-5
         # initial population (arb.)
         self.GS_0 = 8e17
+        self.initial_species = 'singlet'
         # bright threshold: if |Cs|^2 > threshold TT state is considered bright
         self.bright_threshold = 1e-4
         # time axis
@@ -448,7 +447,6 @@ class MerrifieldBardeen(object):
     
     def normalise_population_at(self, species, t):
         idx = np.where((self.t-t)**2 == min((self.t-t)**2))[0][0]
-        newt = self.t[idx:]
-        species = species[idx:]
-        species = species/species[0]
-        return newt, species
+        factor = species[idx]
+        species = species/factor
+        return species, factor
