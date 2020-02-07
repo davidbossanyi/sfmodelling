@@ -1,303 +1,182 @@
-'''
-Contains classes for simulating excited state dynamics of singlet fission
-systems. So far, there are 3 classes: Merrifield, Bardeen and a kind of
-combination of the two MerrifieldBardeen.
+"""
+Contains the clases for several different rate models. The classes can be used 
+to simulate the dynamics of the various excited states as a function of
+excitation density and magnetic field.
 
-Version 1.1
-David Bossanyi 17/10/2019
-dgbossanyi1@sheffield.ac.uk
-'''
+Models included in models.py:
+    - Merrifield
+    - Bardeen
+    - ExtendedBardeen
+    - AnnihilatingTripletPairs
+    - MerrifieldExplicit1TT
+    - Simple3StateModel
+"""
 
 import numpy as np
 from scipy.integrate import odeint
-from matplotlib import pyplot as plt
 
 
-class Merrifield(object):
-    '''
-    Solves the Merrifield model for a given set of cslsq values.
-    '''
+class MerrifieldExplicit1TT(object):
+    """
+    This is basically Merrifields model, but explicitly separating 
+    the 1(TT) from S1 and (T..T).
+    """
+
     def __init__(self):
         self._define_default_parameters()
     
     def _define_default_parameters(self):
+        """
+        Set some arbitrary values to begin with.
+        """
         # generation of photoexcited singlet to model IRF
         self.kGEN = 0.25
         # rates between excited states
         self.kSF = 20.0
         self.k_SF = 0.03
-        self.kDISS = 0.067
+        self.kHOP = 0.067
+        self.k_HOP = 2.5e-4
+        self.kHOP2 = 1e-5
         self.kTTA = 1e-18
-        # spin relaxation (Bardeen addition - not in original Merrifield)
+        # spin relaxation
         self.kRELAX = 0
         # rates of decay
         self.kSNR = 0.1
         self.kSSA = 0
         self.kTTNR = 0.067
         self.kTNR = 1e-5
-        # initial population (per cm-3)
+        # initial population
         self.GS_0 = 8e17
         self.initial_species = 'singlet'
-        # bright threshold: if |Cs|^2 > threshold TT state is considered bright
-        self.bright_threshold = 1e-4
         # time axis
         self.t = np.logspace(-5, 5, 10000)
+        # TTA channel
+        self.TTA_channel = 1
+        
+    def _set_tta_rates(self):
+        """
+        Different options for the recombining triplets.
+        """
+        if self.TTA_channel == 1:  # this is T1 + T1 -> (T..T)
+            self._kTTA_1 = self.kTTA
+            self._kTTA_2 = 0
+            self._kTTA_3 = 0
+        elif self.TTA_channel == 2:  # this is T1 + T1 -> (TT)
+            self._kTTA_1 = 0
+            self._kTTA_2 = self.kTTA
+            self._kTTA_3 = 0
+        elif self.TTA_channel == 3:  # this is T1 + T1 -> S1
+            self._kTTA_1 = 0
+            self._kTTA_2 = 0
+            self._kTTA_3 = self.kTTA
+        else:
+            raise ValueError('TTA channel must be either 1, 2 or 3') 
         
     def _set_generation_rates(self):
-        if self.initial_species == 'singlet':
-            self.kGENS = self.kGEN
-            self.kGENT = 0
-        elif self.initial_species == 'triplet':
-            self.kGENS = 0
-            self.kGENT = self.kGEN
+        """
+        Can either start with population in S1 or T1.
+        """
+        if self.initial_species == 'singlet':  # start by populating the S1 state (standard experiments)
+            self._kGENS = self.kGEN
+            self._kGENT = 0
+        elif self.initial_species == 'triplet':  # start by populating the T1 state (upconversion experiments)
+            self._kGENS = 0
+            self._kGENT = self.kGEN
         else:
-            raise ValueError('initial_species attribute must be either \'singlet\' or \'triplet\'')
+            raise ValueError('initial_species attribute must be either \'singlet\' or \'triplet\'')           
 
-    def _rate_equations(self, t, y, Cslsq):
-        GS, S1, TT_1, TT_2, TT_3, TT_4, TT_5, TT_6, TT_7, TT_8, TT_9, T1 = y
+    def _rate_equations(self, t, y, cslsq):
+        """
+        This function sets the rate equations in the format required by 
+        scipy.integrate.odeint
+        
+        It takes the Cs overlap values as an argument
+        """
+        GS, S1, TT, T_T_1, T_T_2, T_T_3, T_T_4, T_T_5, T_T_6, T_T_7, T_T_8, T_T_9, T1 = y
         dydt = np.zeros(len(y))
         # GS
-        dydt[0] = -(self.kGENS+self.kGENT)*GS
+        dydt[0] = -(self._kGENS+self._kGENT)*GS
         # S1
-        dydt[1] = self.kGENS*GS - (self.kSNR+self.kSF*np.sum(Cslsq))*S1 -self.kSSA*S1*S1+ self.k_SF*(Cslsq[0]*TT_1+Cslsq[1]*TT_2+Cslsq[2]*TT_3+Cslsq[3]*TT_4+Cslsq[4]*TT_5+Cslsq[5]*TT_6+Cslsq[6]*TT_7+Cslsq[7]*TT_8+Cslsq[8]*TT_9)
-        # TT_1
-        dydt[2] = self.kSF*Cslsq[0]*S1 - (self.k_SF*Cslsq[0]+self.kDISS+self.kTTNR+self.kRELAX)*TT_1 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_2+TT_3+TT_4+TT_5+TT_6+TT_7+TT_8+TT_9)
-        # TT_2
-        dydt[3] = self.kSF*Cslsq[1]*S1 - (self.k_SF*Cslsq[1]+self.kDISS+self.kTTNR+self.kRELAX)*TT_2 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_3+TT_4+TT_5+TT_6+TT_7+TT_8+TT_9)
-        # TT_3
-        dydt[4] = self.kSF*Cslsq[2]*S1 - (self.k_SF*Cslsq[2]+self.kDISS+self.kTTNR+self.kRELAX)*TT_3 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_4+TT_5+TT_6+TT_7+TT_8+TT_9)
-        # TT_4
-        dydt[5] = self.kSF*Cslsq[3]*S1 - (self.k_SF*Cslsq[3]+self.kDISS+self.kTTNR+self.kRELAX)*TT_4 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_5+TT_6+TT_7+TT_8+TT_9)
-        # TT_5
-        dydt[6] = self.kSF*Cslsq[4]*S1 - (self.k_SF*Cslsq[4]+self.kDISS+self.kTTNR+self.kRELAX)*TT_5 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_4+TT_6+TT_7+TT_8+TT_9)
-        # TT_6
-        dydt[7] = self.kSF*Cslsq[5]*S1 - (self.k_SF*Cslsq[5]+self.kDISS+self.kTTNR+self.kRELAX)*TT_6 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_4+TT_5+TT_7+TT_8+TT_9)
-        # TT_7
-        dydt[8] = self.kSF*Cslsq[6]*S1 - (self.k_SF*Cslsq[6]+self.kDISS+self.kTTNR+self.kRELAX)*TT_7 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_4+TT_5+TT_6+TT_8+TT_9)
-        # TT_8
-        dydt[9] = self.kSF*Cslsq[7]*S1 - (self.k_SF*Cslsq[7]+self.kDISS+self.kTTNR+self.kRELAX)*TT_8 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_4+TT_5+TT_6+TT_7+TT_9)
-        # TT_9
-        dydt[10] = self.kSF*Cslsq[8]*S1 - (self.k_SF*Cslsq[8]+self.kDISS+self.kTTNR+self.kRELAX)*TT_9 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_4+TT_5+TT_6+TT_7+TT_8)
-        # T1
-        dydt[11] = self.kGENT*GS + 2.0*self.kDISS*(TT_1+TT_2+TT_3+TT_4+TT_5+TT_6+TT_7+TT_8+TT_9) - 2.0*self.kTTA*T1*T1 - self.kTNR*T1
-        #
-        return dydt
-    
-    def simulate(self, Cslsq):
-        self._set_generation_rates()
-        y0 = np.array([self.GS_0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-        y = odeint(lambda y, t: self._rate_equations(t, y, Cslsq), y0, self.t)
-        self._unpack_simulation(y, Cslsq)
-
-    def _unpack_simulation(self, y, Cslsq):
-        self.GS = y[:, 0]
-        self.S1 = y[:, 1]
-        self.TT_bright = np.sum(y[:, np.where(Cslsq > self.bright_threshold)[0]+2], axis=1)
-        self.TT_dark = np.sum(y[:, np.where(Cslsq <= self.bright_threshold)[0]+2], axis=1)
-        self.TT_total = np.sum(y[:, 2:11], axis=1)
-        self.T1 = y[:, 11]
-        self.num_TT_bright = len(Cslsq[Cslsq > self.bright_threshold])
-        self._integrate_populations()
-        
-    def plot_simulation(self):
-        fig = plt.figure(figsize=(6, 5))
-        plt.loglog(self.t, self.S1, 'b-', label=r'S$_1$')
-        plt.loglog(self.t, self.TT_bright, 'r-', label=r'TT$_{bright}$')
-        plt.loglog(self.t, self.TT_dark, 'k-', label=r'TT$_{dark}$')
-        plt.loglog(self.t, self.TT_total, 'm-', label=r'TT$_{total}$')
-        plt.loglog(self.t, self.T1, 'g-', label=r'T$_1$')
-        plt.xlabel('time (ns)')
-        plt.ylabel(r'population (cm$^{-3}$)')
-        plt.legend()
-        plt.xlim([1e-4, 1e5])
-        plt.ylim([1e-8, 1e1])
-        return fig
-    
-    def _integrate_populations(self):
-        self.GS_int = np.trapz(self.GS, x=self.t)
-        self.S1_int = np.trapz(self.S1, x=self.t)
-        self.TT_bright_int = np.trapz(self.TT_bright, x=self.t)
-        self.TT_dark_int = np.trapz(self.TT_dark, x=self.t)
-        self.TT_total_int = np.trapz(self.TT_total, x=self.t)
-        self.T1_int = np.trapz(self.T1, x=self.t)
-        
-    def get_population_between(self, species, t1, t2):
-        mask = ((self.t >= t1) & (self.t <= t2))
-        t = self.t[mask]
-        if species == 'GS':
-            population = np.trapz(self.GS[mask], x=t)/(t2-t1)
-        elif species == 'S1':
-            population = np.trapz(self.S1[mask], x=t)/(t2-t1)
-        elif species == 'TT_bright':
-            population = np.trapz(self.TT_bright[mask], x=t)/(t2-t1)
-        elif species == 'TT_dark':
-            population = np.trapz(self.TT_dark[mask], x=t)/(t2-t1)
-        elif species == 'TT_total':
-            population = np.trapz(self.TT_total[mask], x=t)/(t2-t1)
-        elif species == 'T1':
-            population = np.trapz(self.T1[mask], x=t)/(t2-t1)
-        else:
-            raise ValueError('\'species\' must be one of \'GS\', \'S1\', \'TT_bright\', \'TT_dark\', \'TT_total\', \'T1\'')
-        return population
-    
-    def normalise_population_at(self, species, t):
-        idx = np.where((self.t-t)**2 == min((self.t-t)**2))[0][0]
-        factor = species[idx]
-        species = species/factor
-        return species, factor
-        
-        
-
-class Bardeen(object):
-    '''
-    Solves the Bardeen model for a given set of cslsq values.
-    '''
-    def __init__(self):
-        self._define_default_parameters()
-    
-    def _define_default_parameters(self):
-        # generation of photoexcited singlet to model IRF
-        self.kGEN = 0.25
-        # rates between excited states
-        self.kSF = 20.0
-        self.k_SF = 0.03
-        self.kHOP = 0.067
-        self.k_HOP = 2.5e-4
-        # spin relaxation
-        self.kRELAX = 0.033
-        # rates of decay
-        self.kSNR = 0.1
-        self.kSSA =0
-        self.kTTNR = 0.067
-        self.kSPIN = 2.5e-4
-        # initial population (arb.)
-        self.GS_0 = 1
-        # bright threshold: if |Cs|^2 > threshold TT state is considered bright
-        self.bright_threshold = 1e-4
-        # time axis
-        self.t = np.logspace(-5, 5, 10000)
-
-    def _rate_equations(self, t, y, Cslsq):
-        '''
-        Note that the TT non-radiative rate is multiplied by Cslsq also here....
-        '''
-        GS, S1, TT_1, TT_2, TT_3, TT_4, TT_5, TT_6, TT_7, TT_8, TT_9, T_T_1, T_T_2, T_T_3, T_T_4, T_T_5, T_T_6, T_T_7, T_T_8, T_T_9 = y
-        dydt = np.zeros(len(y))
-        # GS
-        dydt[0] = -self.kGEN*GS
-        # S1
-        dydt[1] = self.kGEN*GS - (self.kSNR+self.kSF*np.sum(Cslsq))*S1 -self.kSSA*S1*S1 + self.k_SF*(Cslsq[0]*TT_1+Cslsq[1]*TT_2+Cslsq[2]*TT_3+Cslsq[3]*TT_4+Cslsq[4]*TT_5+Cslsq[5]*TT_6+Cslsq[6]*TT_7+Cslsq[7]*TT_8+Cslsq[8]*TT_9)
-        # TT_1
-        dydt[2] = self.kSF*Cslsq[0]*S1 - (self.k_SF+self.kTTNR)*Cslsq[0]*TT_1 - self.kHOP*TT_1 + self.k_HOP*T_T_1
-        # TT_2
-        dydt[3] = self.kSF*Cslsq[1]*S1 - (self.k_SF+self.kTTNR)*Cslsq[1]*TT_2 - self.kHOP*TT_2 + self.k_HOP*T_T_2
-        # TT_3
-        dydt[4] = self.kSF*Cslsq[2]*S1 - (self.k_SF+self.kTTNR)*Cslsq[2]*TT_3 - self.kHOP*TT_3 + self.k_HOP*T_T_3
-        # TT_4
-        dydt[5] = self.kSF*Cslsq[3]*S1 - (self.k_SF+self.kTTNR)*Cslsq[3]*TT_4 - self.kHOP*TT_4 + self.k_HOP*T_T_4
-        # TT_5
-        dydt[6] = self.kSF*Cslsq[4]*S1 - (self.k_SF+self.kTTNR)*Cslsq[4]*TT_5 - self.kHOP*TT_5 + self.k_HOP*T_T_5
-        # TT_6
-        dydt[7] = self.kSF*Cslsq[5]*S1 - (self.k_SF+self.kTTNR)*Cslsq[5]*TT_6 - self.kHOP*TT_6 + self.k_HOP*T_T_6
-        # TT_7
-        dydt[8] = self.kSF*Cslsq[6]*S1 - (self.k_SF+self.kTTNR)*Cslsq[6]*TT_7 - self.kHOP*TT_7 + self.k_HOP*T_T_7
-        # TT_8
-        dydt[9] = self.kSF*Cslsq[7]*S1 - (self.k_SF+self.kTTNR)*Cslsq[7]*TT_8 - self.kHOP*TT_8 + self.k_HOP*T_T_8
-        # TT_9
-        dydt[10] = self.kSF*Cslsq[8]*S1 - (self.k_SF+self.kTTNR)*Cslsq[8]*TT_9 - self.kHOP*TT_9 + self.k_HOP*T_T_9
+        dydt[1] = self._kGENS*GS - (self.kSNR+self.kSF)*S1 - self.kSSA*S1*S1 + self.k_SF*TT + self._kTTA_3*T1**2
+        # TT
+        dydt[2] = self.kSF*S1 - (self.k_SF+self.kTTNR+self.kHOP*np.sum(cslsq))*TT + self.k_HOP*(cslsq[0]*T_T_1+cslsq[1]*T_T_2+cslsq[2]*T_T_3+cslsq[3]*T_T_4+cslsq[4]*T_T_5+cslsq[5]*T_T_6+cslsq[6]*T_T_7+cslsq[7]*T_T_8+cslsq[8]*T_T_9) + self._kTTA_2*T1**2
         # T_T_1
-        dydt[11] = self.kHOP*TT_1 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_1 + (1/8)*self.kRELAX*(T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        dydt[3] = self.kHOP*cslsq[0]*TT - (self.k_HOP*cslsq[0]+self.kTNR+self.kHOP2+self.kRELAX)*T_T_1 + (1/9)*self._kTTA_1*T1**2 + (1/8)*self.kRELAX*(T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
         # T_T_2
-        dydt[12] = self.kHOP*TT_2 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_2 + (1/8)*self.kRELAX*(T_T_1+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        dydt[4] = self.kHOP*cslsq[1]*TT - (self.k_HOP*cslsq[1]+self.kTNR+self.kHOP2+self.kRELAX)*T_T_2 + (1/9)*self._kTTA_1*T1**2 + (1/8)*self.kRELAX*(T_T_1+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
         # T_T_3
-        dydt[13] = self.kHOP*TT_3 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_3 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        dydt[5] = self.kHOP*cslsq[2]*TT - (self.k_HOP*cslsq[2]+self.kTNR+self.kHOP2+self.kRELAX)*T_T_3 + (1/9)*self._kTTA_1*T1**2 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
         # T_T_4
-        dydt[14] = self.kHOP*TT_4 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_4 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        dydt[6] = self.kHOP*cslsq[3]*TT - (self.k_HOP*cslsq[3]+self.kTNR+self.kHOP2+self.kRELAX)*T_T_4 + (1/9)*self._kTTA_1*T1**2 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
         # T_T_5
-        dydt[15] = self.kHOP*TT_5 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_5 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_6+T_T_7+T_T_8+T_T_9)
+        dydt[7] = self.kHOP*cslsq[4]*TT - (self.k_HOP*cslsq[4]+self.kTNR+self.kHOP2+self.kRELAX)*T_T_5 + (1/9)*self._kTTA_1*T1**2 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_6+T_T_7+T_T_8+T_T_9)
         # T_T_6
-        dydt[16] = self.kHOP*TT_6 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_6 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_7+T_T_8+T_T_9)
+        dydt[8] = self.kHOP*cslsq[5]*TT - (self.k_HOP*cslsq[5]+self.kTNR+self.kHOP2+self.kRELAX)*T_T_6 + (1/9)*self._kTTA_1*T1**2 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_7+T_T_8+T_T_9)
         # T_T_7
-        dydt[17] = self.kHOP*TT_7 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_7 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_8+T_T_9)
+        dydt[9] = self.kHOP*cslsq[6]*TT - (self.k_HOP*cslsq[6]+self.kTNR+self.kHOP2+self.kRELAX)*T_T_7 + (1/9)*self._kTTA_1*T1**2 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_8+T_T_9)
         # T_T_8
-        dydt[18] = self.kHOP*TT_8 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_8 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_9)
+        dydt[10] = self.kHOP*cslsq[7]*TT - (self.k_HOP*cslsq[7]+self.kTNR+self.kHOP2+self.kRELAX)*T_T_8 + (1/9)*self._kTTA_1*T1**2 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_9)
         # T_T_9
-        dydt[19] = self.kHOP*TT_9 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_9 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8)
+        dydt[11] = self.kHOP*cslsq[8]*TT - (self.k_HOP*cslsq[8]+self.kTNR+self.kHOP2+self.kRELAX)*T_T_9 + (1/9)*self._kTTA_1*T1**2 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8)
+        #
+        dydt[12] = self._kGENT*GS + (self.kTNR+(2.0*self.kHOP2))*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9) - 2*self._kTTA_1*T1**2 - 2*self._kTTA_2*T1**2 - 2*self._kTTA_3*T1**2 - self.kTNR*T1
         #
         return dydt
     
-    def simulate(self, Cslsq):
-        y0 = np.array([self.GS_0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-        y = odeint(lambda y, t: self._rate_equations(t, y, Cslsq), y0, self.t)
-        self._unpack_simulation(y, Cslsq)
+    def simulate(self, cslsq):
+        """
+        Given an array of 9 cslsq calues (output from SpinHamiltonian class) 
+        this simulates all population dynamics
+        """
+        self._set_tta_rates()
+        self._set_generation_rates()
+        y0 = np.array([self.GS_0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])  # the number of zeros needs to match the number of species!
+        y = odeint(lambda y, t: self._rate_equations(t, y, cslsq), y0, self.t)
+        self._unpack_simulation(y, cslsq)
 
-    def _unpack_simulation(self, y, Cslsq):
+    def _unpack_simulation(self, y, cslsq):
+        """
+        This is called by model.simulate - it populates species attributes 
+        with numpy arrays which are the population dynamics
+        """
         self.GS = y[:, 0]
         self.S1 = y[:, 1]
-        self.TT_bright = np.sum(y[:, np.where(Cslsq > self.bright_threshold)[0]+2], axis=1)
-        self.TT_dark = np.sum(y[:, np.where(Cslsq <= self.bright_threshold)[0]+2], axis=1)
-        self.TT_total = np.sum(y[:, 2:11], axis=1)
-        self.T_T_total = np.sum(y[:, 11:], axis=1)
-        self.num_TT_bright = len(Cslsq[Cslsq > self.bright_threshold])
-        self._integrate_populations()
-        
-    def plot_simulation(self):
-        fig = plt.figure(figsize=(6, 5))
-        plt.loglog(self.t, self.S1, 'b-', label=r'S$_1$')
-        plt.loglog(self.t, self.TT_bright, 'r-', label=r'TT$_{bright}$')
-        plt.loglog(self.t, self.TT_dark, 'k-', label=r'TT$_{dark}$')
-        plt.loglog(self.t, self.TT_total, 'm-', label=r'TT$_{total}$')
-        plt.loglog(self.t, self.T_T_total, 'c-', label=r'T..T$_{total}$')
-        plt.xlabel('time (ns)')
-        plt.ylabel(r'population (arb.)')
-        plt.legend()
-        plt.xlim([1e-4, 1e5])
-        plt.ylim([1e-8, 1e1])
-        return fig
-    
-    def _integrate_populations(self):
-        self.GS_int = np.trapz(self.GS, x=self.t)
-        self.S1_int = np.trapz(self.S1, x=self.t)
-        self.TT_bright_int = np.trapz(self.TT_bright, x=self.t)
-        self.TT_dark_int = np.trapz(self.TT_dark, x=self.t)
-        self.TT_total_int = np.trapz(self.TT_total, x=self.t)
-        self.T_T_total_int = np.trapz(self.T_T_total, x=self.t)
+        self.TT = y[:, 2]
+        self.T_T_total = np.sum(y[:, 3:12], axis=1)
+        self.T1 = y[:, -1]
         
     def get_population_between(self, species, t1, t2):
+        """
+        integrates the dynamics of species (e.g. model.S1) 
+        between times t1 and t2
+        """
         mask = ((self.t >= t1) & (self.t <= t2))
         t = self.t[mask]
-        if species == 'GS':
-            population = np.trapz(self.GS[mask], x=t)/(t2-t1)
-        elif species == 'S1':
-            population = np.trapz(self.S1[mask], x=t)/(t2-t1)
-        elif species == 'TT_bright':
-            population = np.trapz(self.TT_bright[mask], x=t)/(t2-t1)
-        elif species == 'TT_dark':
-            population = np.trapz(self.TT_dark[mask], x=t)/(t2-t1)
-        elif species == 'TT_total':
-            population = np.trapz(self.TT_total[mask], x=t)/(t2-t1)
-        elif species == 'T_T_total':
-            population = np.trapz(self.T_T_total[mask], x=t)/(t2-t1)
-        else:
-            raise ValueError('\'species\' must be one of \'GS\', \'S1\', \'TT_bright\', \'TT_dark\', \'TT_total\', \'T_T_total\'')
+        population = np.trapz(species[mask], x=t)/(t2-t1)
         return population
     
     def normalise_population_at(self, species, t):
+        """
+        normalises the dynamics of species (e.g. model.S1) at time t
+        """
         idx = np.where((self.t-t)**2 == min((self.t-t)**2))[0][0]
         factor = species[idx]
         species = species/factor
         return species, factor
+
     
-    
-class MerrifieldBardeen(object):
-    '''
-    Solves the Bardeen model for a given set of cslsq values but includes
-    free triplets as well, in the same way as Merrifield.
-    '''
+class ExtendedBardeen(object):
+    """
+    This is Bardeens model but including free triplets as well, in the same 
+    way as Merrifields
+    """
     def __init__(self):
         self._define_default_parameters()
     
     def _define_default_parameters(self):
+        """
+        Set some arbitrary values to begin with.
+        """
         # generation of photoexcited singlet to model IRF
         self.kGEN = 0.25
         # rates between excited states
@@ -318,12 +197,13 @@ class MerrifieldBardeen(object):
         # initial population (arb.)
         self.GS_0 = 8e17
         self.initial_species = 'singlet'
-        # bright threshold: if |Cs|^2 > threshold TT state is considered bright
-        self.bright_threshold = 1e-4
         # time axis
         self.t = np.logspace(-5, 5, 10000)
         
     def _set_generation_rates(self):
+        """
+        Can either start with population in S1 or T1.
+        """
         if self.initial_species == 'singlet':
             self.kGENS = self.kGEN
             self.kGENT = 0
@@ -333,34 +213,37 @@ class MerrifieldBardeen(object):
         else:
             raise ValueError('initial_species attribute must be either \'singlet\' or \'triplet\'')
 
-    def _rate_equations(self, t, y, Cslsq):
-        '''
-        Note that the TT non-radiative rate is multiplied by Cslsq also here....
-        '''
+    def _rate_equations(self, t, y, cslsq):
+        """
+        This function sets the rate equations in the format required by 
+        scipy.integrate.odeint
+        
+        It takes the Cs overlap values as an argument
+        """
         GS, S1, TT_1, TT_2, TT_3, TT_4, TT_5, TT_6, TT_7, TT_8, TT_9, T_T_1, T_T_2, T_T_3, T_T_4, T_T_5, T_T_6, T_T_7, T_T_8, T_T_9, T1 = y
         dydt = np.zeros(len(y))
         # GS
         dydt[0] = -(self.kGENS+self.kGENT)*GS
         # S1
-        dydt[1] = self.kGENS*GS - (self.kSNR+self.kSF*np.sum(Cslsq))*S1 -self.kSSA*S1*S1 + self.k_SF*(Cslsq[0]*TT_1+Cslsq[1]*TT_2+Cslsq[2]*TT_3+Cslsq[3]*TT_4+Cslsq[4]*TT_5+Cslsq[5]*TT_6+Cslsq[6]*TT_7+Cslsq[7]*TT_8+Cslsq[8]*TT_9)
+        dydt[1] = self.kGENS*GS - (self.kSNR+self.kSF*np.sum(cslsq))*S1 -self.kSSA*S1*S1 + self.k_SF*(cslsq[0]*TT_1+cslsq[1]*TT_2+cslsq[2]*TT_3+cslsq[3]*TT_4+cslsq[4]*TT_5+cslsq[5]*TT_6+cslsq[6]*TT_7+cslsq[7]*TT_8+cslsq[8]*TT_9)
         # TT_1
-        dydt[2] = self.kSF*Cslsq[0]*S1 - (self.k_SF+self.kTTNR)*Cslsq[0]*TT_1 - self.kHOP*TT_1 + self.k_HOP*T_T_1
+        dydt[2] = self.kSF*cslsq[0]*S1 - (self.k_SF*cslsq[0]+self.kTTNR)*TT_1 - self.kHOP*TT_1 + self.k_HOP*T_T_1
         # TT_2
-        dydt[3] = self.kSF*Cslsq[1]*S1 - (self.k_SF+self.kTTNR)*Cslsq[1]*TT_2 - self.kHOP*TT_2 + self.k_HOP*T_T_2
+        dydt[3] = self.kSF*cslsq[1]*S1 - (self.k_SF*cslsq[1]+self.kTTNR)*TT_2 - self.kHOP*TT_2 + self.k_HOP*T_T_2
         # TT_3
-        dydt[4] = self.kSF*Cslsq[2]*S1 - (self.k_SF+self.kTTNR)*Cslsq[2]*TT_3 - self.kHOP*TT_3 + self.k_HOP*T_T_3
+        dydt[4] = self.kSF*cslsq[2]*S1 - (self.k_SF*cslsq[2]+self.kTTNR)*TT_3 - self.kHOP*TT_3 + self.k_HOP*T_T_3
         # TT_4
-        dydt[5] = self.kSF*Cslsq[3]*S1 - (self.k_SF+self.kTTNR)*Cslsq[3]*TT_4 - self.kHOP*TT_4 + self.k_HOP*T_T_4
+        dydt[5] = self.kSF*cslsq[3]*S1 - (self.k_SF*cslsq[3]+self.kTTNR)*TT_4 - self.kHOP*TT_4 + self.k_HOP*T_T_4
         # TT_5
-        dydt[6] = self.kSF*Cslsq[4]*S1 - (self.k_SF+self.kTTNR)*Cslsq[4]*TT_5 - self.kHOP*TT_5 + self.k_HOP*T_T_5
+        dydt[6] = self.kSF*cslsq[4]*S1 - (self.k_SF*cslsq[4]+self.kTTNR)*TT_5 - self.kHOP*TT_5 + self.k_HOP*T_T_5
         # TT_6
-        dydt[7] = self.kSF*Cslsq[5]*S1 - (self.k_SF+self.kTTNR)*Cslsq[5]*TT_6 - self.kHOP*TT_6 + self.k_HOP*T_T_6
+        dydt[7] = self.kSF*cslsq[5]*S1 - (self.k_SF*cslsq[5]+self.kTTNR)*TT_6 - self.kHOP*TT_6 + self.k_HOP*T_T_6
         # TT_7
-        dydt[8] = self.kSF*Cslsq[6]*S1 - (self.k_SF+self.kTTNR)*Cslsq[6]*TT_7 - self.kHOP*TT_7 + self.k_HOP*T_T_7
+        dydt[8] = self.kSF*cslsq[6]*S1 - (self.k_SF*cslsq[6]+self.kTTNR)*TT_7 - self.kHOP*TT_7 + self.k_HOP*T_T_7
         # TT_8
-        dydt[9] = self.kSF*Cslsq[7]*S1 - (self.k_SF+self.kTTNR)*Cslsq[7]*TT_8 - self.kHOP*TT_8 + self.k_HOP*T_T_8
+        dydt[9] = self.kSF*cslsq[7]*S1 - (self.k_SF*cslsq[7]+self.kTTNR)*TT_8 - self.kHOP*TT_8 + self.k_HOP*T_T_8
         # TT_9
-        dydt[10] = self.kSF*Cslsq[8]*S1 - (self.k_SF+self.kTTNR)*Cslsq[8]*TT_9 - self.kHOP*TT_9 + self.k_HOP*T_T_9
+        dydt[10] = self.kSF*cslsq[8]*S1 - (self.k_SF*cslsq[8]+self.kTTNR)*TT_9 - self.kHOP*TT_9 + self.k_HOP*T_T_9
         # T_T_1
         dydt[11] = self.kHOP*TT_1 - (self.k_HOP+self.kSPIN+self.kRELAX+self.kDISS)*T_T_1 + (1/8)*self.kRELAX*(T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9) + (1/9)*self.kTTA*T1*T1
         # T_T_2
@@ -384,68 +267,539 @@ class MerrifieldBardeen(object):
         #
         return dydt
     
-    def simulate(self, Cslsq):
+    def simulate(self, cslsq):
+        """
+        Given an array of 9 cslsq calues (output from SpinHamiltonian class) 
+        this simulates all population dynamics
+        """
         self._set_generation_rates()
         y0 = np.array([self.GS_0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-        y = odeint(lambda y, t: self._rate_equations(t, y, Cslsq), y0, self.t)
-        self._unpack_simulation(y, Cslsq)
-
-    def _unpack_simulation(self, y, Cslsq):
+        y = odeint(lambda y, t: self._rate_equations(t, y, cslsq), y0, self.t)
+        self._unpack_simulation(y, cslsq)
+        
+    def _unpack_simulation(self, y, cslsq):
+        """
+        This is called by model.simulate - it populates species attributes 
+        with numpy arrays which are the population dynamics
+        """
         self.GS = y[:, 0]
         self.S1 = y[:, 1]
-        self.TT_bright = np.sum(y[:, np.where(Cslsq > self.bright_threshold)[0]+2], axis=1)
-        self.TT_dark = np.sum(y[:, np.where(Cslsq <= self.bright_threshold)[0]+2], axis=1)
+        self.TT_bright = cslsq[0]*y[:, 2] + cslsq[1]*y[:, 3] + cslsq[2]*y[:, 4] + cslsq[3]*y[:, 5] + cslsq[4]*y[:, 6] + cslsq[5]*y[:, 7] + cslsq[6]*y[:, 8] + cslsq[7]*y[:, 9] + cslsq[8]*y[:, 10]
         self.TT_total = np.sum(y[:, 2:11], axis=1)
         self.T_T_total = np.sum(y[:, 11:-1], axis=1)
         self.T1 = y[:, -1]
-        self.num_TT_bright = len(Cslsq[Cslsq > self.bright_threshold])
-        self._integrate_populations()
-        
-    def plot_simulation(self):
-        fig = plt.figure(figsize=(6, 5))
-        plt.loglog(self.t, self.S1, 'b-', label=r'S$_1$')
-        plt.loglog(self.t, self.TT_bright, 'r-', label=r'TT$_{bright}$')
-        plt.loglog(self.t, self.TT_dark, 'k-', label=r'TT$_{dark}$')
-        plt.loglog(self.t, self.TT_total, 'm-', label=r'TT$_{total}$')
-        plt.loglog(self.t, self.T_T_total, 'c-', label=r'T..T$_{total}$')
-        plt.loglog(self.t, self.T1, 'g-', label=r'T$_1$')
-        plt.xlabel('time (ns)')
-        plt.ylabel(r'population (cm$^{-3}$)')
-        plt.legend()
-        plt.xlim([1e-4, 1e5])
-        plt.ylim([1e-8, 1e1])
-        return fig
-    
-    def _integrate_populations(self):
-        self.GS_int = np.trapz(self.GS, x=self.t)
-        self.S1_int = np.trapz(self.S1, x=self.t)
-        self.TT_bright_int = np.trapz(self.TT_bright, x=self.t)
-        self.TT_dark_int = np.trapz(self.TT_dark, x=self.t)
-        self.TT_total_int = np.trapz(self.TT_total, x=self.t)
-        self.T_T_total_int = np.trapz(self.T_T_total, x=self.t)
         
     def get_population_between(self, species, t1, t2):
+        """
+        integrates the dynamics of species (e.g. model.S1) 
+        between times t1 and t2
+        """
         mask = ((self.t >= t1) & (self.t <= t2))
         t = self.t[mask]
-        if species == 'GS':
-            population = np.trapz(self.GS[mask], x=t)/(t2-t1)
-        elif species == 'S1':
-            population = np.trapz(self.S1[mask], x=t)/(t2-t1)
-        elif species == 'TT_bright':
-            population = np.trapz(self.TT_bright[mask], x=t)/(t2-t1)
-        elif species == 'TT_dark':
-            population = np.trapz(self.TT_dark[mask], x=t)/(t2-t1)
-        elif species == 'TT_total':
-            population = np.trapz(self.TT_total[mask], x=t)/(t2-t1)
-        elif species == 'T_T_total':
-            population = np.trapz(self.T_T_total[mask], x=t)/(t2-t1)
-        elif species == 'T1':
-            population = np.trapz(self.T1[mask], x=t)/(t2-t1)
-        else:
-            raise ValueError('\'species\' must be one of \'GS\', \'S1\', \'TT_bright\', \'TT_dark\', \'TT_total\', \'T_T_total\', \'T1\'')
+        population = np.trapz(species[mask], x=t)/(t2-t1)
         return population
     
     def normalise_population_at(self, species, t):
+        """
+        normalises the dynamics of species (e.g. model.S1) at time t
+        """
+        idx = np.where((self.t-t)**2 == min((self.t-t)**2))[0][0]
+        factor = species[idx]
+        species = species/factor
+        return species, factor
+    
+    
+class AnnihilatingTripletPairs(object):
+    """
+    Based on Bardeen, but allowing (T..T) to annihilate with each other like
+    (T..T) + (T..T) -> 1(TT) + T1 + T1
+    """
+    
+    def __init__(self):
+        self._define_default_parameters()
+    
+    def _define_default_parameters(self):
+        """
+        Set some arbitrary values to begin with.
+        """
+        # generation of photoexcited singlet to model IRF
+        self.kGEN = 0.25
+        # rates between excited states
+        self.kSF = 20.0
+        self.k_SF = 0.03
+        self.kHOP = 0.067
+        self.k_HOP = 2.5e-4
+        self.kTTA = 1e-18
+        # spin relaxation
+        self.kRELAX = 0.033
+        self.kDECOH = 0.001
+        # rates of decay
+        self.kSNR = 0.1
+        self.kSSA = 0
+        self.kTTNR = 0.067
+        self.kTNR = 1e-5
+        # initial population (arb.)
+        self.GS_0 = 8e17
+        self.initial_species = 'singlet'
+        # time axis
+        self.t = np.logspace(-5, 5, 10000)
+        
+    def _set_generation_rates(self):
+        """
+        Can either start with population in S1 or T1.
+        """
+        if self.initial_species == 'singlet':
+            self.kGENS = self.kGEN
+            self.kGENT = 0
+        elif self.initial_species == 'triplet':
+            self.kGENS = 0
+            self.kGENT = self.kGEN
+        else:
+            raise ValueError('initial_species attribute must be either \'singlet\' or \'triplet\'')
+
+    def _rate_equations(self, t, y, cslsq):
+        """
+        This function sets the rate equations in the format required by 
+        scipy.integrate.odeint
+        
+        It takes the Cs overlap values as an argument
+        """
+        GS, S1, TT_1, TT_2, TT_3, TT_4, TT_5, TT_6, TT_7, TT_8, TT_9, T_T_1, T_T_2, T_T_3, T_T_4, T_T_5, T_T_6, T_T_7, T_T_8, T_T_9, T1 = y
+        dydt = np.zeros(len(y))
+        # GS
+        dydt[0] = -(self.kGENS+self.kGENT)*GS
+        # S1
+        dydt[1] = self.kGENS*GS - (self.kSNR+self.kSF*np.sum(cslsq))*S1 -self.kSSA*S1*S1 + self.k_SF*(cslsq[0]*TT_1+cslsq[1]*TT_2+cslsq[2]*TT_3+cslsq[3]*TT_4+cslsq[4]*TT_5+cslsq[5]*TT_6+cslsq[6]*TT_7+cslsq[7]*TT_8+cslsq[8]*TT_9)
+        # TT_1
+        dydt[2] = self.kSF*cslsq[0]*S1 - (self.k_SF*cslsq[0]+self.kTTNR)*TT_1 - self.kHOP*TT_1 + self.k_HOP*T_T_1 + (1/81)*self.kTTA*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)**2 + (1/9)*self.kTTA*T1**2
+        # TT_2
+        dydt[3] = self.kSF*cslsq[1]*S1 - (self.k_SF*cslsq[1]+self.kTTNR)*TT_2 - self.kHOP*TT_2 + self.k_HOP*T_T_2 + (1/81)*self.kTTA*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)**2 + (1/9)*self.kTTA*T1**2
+        # TT_3
+        dydt[4] = self.kSF*cslsq[2]*S1 - (self.k_SF*cslsq[2]+self.kTTNR)*TT_3 - self.kHOP*TT_3 + self.k_HOP*T_T_3 + (1/81)*self.kTTA*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)**2 + (1/9)*self.kTTA*T1**2
+        # TT_4
+        dydt[5] = self.kSF*cslsq[3]*S1 - (self.k_SF*cslsq[3]+self.kTTNR)*TT_4 - self.kHOP*TT_4 + self.k_HOP*T_T_4 + (1/81)*self.kTTA*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)**2 + (1/9)*self.kTTA*T1**2
+        # TT_5
+        dydt[6] = self.kSF*cslsq[4]*S1 - (self.k_SF*cslsq[4]+self.kTTNR)*TT_5 - self.kHOP*TT_5 + self.k_HOP*T_T_5 + (1/81)*self.kTTA*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)**2 + (1/9)*self.kTTA*T1**2
+        # TT_6
+        dydt[7] = self.kSF*cslsq[5]*S1 - (self.k_SF*cslsq[5]+self.kTTNR)*TT_6 - self.kHOP*TT_6 + self.k_HOP*T_T_6 + (1/81)*self.kTTA*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)**2 + (1/9)*self.kTTA*T1**2
+        # TT_7
+        dydt[8] = self.kSF*cslsq[6]*S1 - (self.k_SF*cslsq[6]+self.kTTNR)*TT_7 - self.kHOP*TT_7 + self.k_HOP*T_T_7 + (1/81)*self.kTTA*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)**2 + (1/9)*self.kTTA*T1**2
+        # TT_8
+        dydt[9] = self.kSF*cslsq[7]*S1 - (self.k_SF*cslsq[7]+self.kTTNR)*TT_8 - self.kHOP*TT_8 + self.k_HOP*T_T_8 + (1/81)*self.kTTA*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)**2 + (1/9)*self.kTTA*T1**2
+        # TT_9
+        dydt[10] = self.kSF*cslsq[8]*S1 - (self.k_SF*cslsq[8]+self.kTTNR)*TT_9 - self.kHOP*TT_9 + self.k_HOP*T_T_9 + (1/81)*self.kTTA*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)**2 + (1/9)*self.kTTA*T1**2
+        # T_T_1
+        dydt[11] = self.kHOP*TT_1 - (self.k_HOP+self.kRELAX+self.kTNR+self.kDECOH)*T_T_1 + (1/8)*self.kRELAX*(T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9) - (2/9)*self.kTTA*T_T_1*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_2
+        dydt[12] = self.kHOP*TT_2 - (self.k_HOP+self.kRELAX+self.kTNR+self.kDECOH)*T_T_2 + (1/8)*self.kRELAX*(T_T_1+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9) - (2/9)*self.kTTA*T_T_2*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_3
+        dydt[13] = self.kHOP*TT_3 - (self.k_HOP+self.kRELAX+self.kTNR+self.kDECOH)*T_T_3 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9) - (2/9)*self.kTTA*T_T_3*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_4
+        dydt[14] = self.kHOP*TT_4 - (self.k_HOP+self.kRELAX+self.kTNR+self.kDECOH)*T_T_4 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9) - (2/9)*self.kTTA*T_T_4*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_5
+        dydt[15] = self.kHOP*TT_5 - (self.k_HOP+self.kRELAX+self.kTNR+self.kDECOH)*T_T_5 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_6+T_T_7+T_T_8+T_T_9) - (2/9)*self.kTTA*T_T_5*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_6
+        dydt[16] = self.kHOP*TT_6 - (self.k_HOP+self.kRELAX+self.kTNR+self.kDECOH)*T_T_6 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_7+T_T_8+T_T_9) - (2/9)*self.kTTA*T_T_6*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_7
+        dydt[17] = self.kHOP*TT_7 - (self.k_HOP+self.kRELAX+self.kTNR+self.kDECOH)*T_T_7 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_8+T_T_9) - (2/9)*self.kTTA*T_T_7*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_8
+        dydt[18] = self.kHOP*TT_8 - (self.k_HOP+self.kRELAX+self.kTNR+self.kDECOH)*T_T_8 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_9) - (2/9)*self.kTTA*T_T_8*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_9
+        dydt[19] = self.kHOP*TT_9 - (self.k_HOP+self.kRELAX+self.kTNR+self.kDECOH)*T_T_9 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8) - (2/9)*self.kTTA*T_T_9*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        #
+        dydt[20] = self.kGENT*GS + (self.kTNR+(2.0*self.kDECOH))*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9) - 2.0*self.kTTA*T1**2 - self.kTNR*T1 + (2/9)*self.kTTA*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)**2
+        #
+        return dydt
+    
+    def simulate(self, cslsq):
+        """
+        Given an array of 9 cslsq calues (output from SpinHamiltonian class) 
+        this simulates all population dynamics
+        """
+        self._set_generation_rates()
+        y0 = np.array([self.GS_0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        y = odeint(lambda y, t: self._rate_equations(t, y, cslsq), y0, self.t)
+        self._unpack_simulation(y, cslsq)
+
+    def _unpack_simulation(self, y, cslsq):
+        """
+        This is called by model.simulate - it populates species attributes 
+        with numpy arrays which are the population dynamics
+        """
+        self.GS = y[:, 0]
+        self.S1 = y[:, 1]
+        self.TT_bright = cslsq[0]*y[:, 2] + cslsq[1]*y[:, 3] + cslsq[2]*y[:, 4] + cslsq[3]*y[:, 5] + cslsq[4]*y[:, 6] + cslsq[5]*y[:, 7] + cslsq[6]*y[:, 8] + cslsq[7]*y[:, 9] + cslsq[8]*y[:, 10]
+        self.TT_total = np.sum(y[:, 2:11], axis=1)
+        self.T_T_total = np.sum(y[:, 11:-1], axis=1)
+        self.T1 = y[:, -1]
+        
+    def get_population_between(self, species, t1, t2):
+        """
+        integrates the dynamics of species (e.g. model.S1) 
+        between times t1 and t2
+        """
+        mask = ((self.t >= t1) & (self.t <= t2))
+        t = self.t[mask]
+        population = np.trapz(species[mask], x=t)/(t2-t1)
+        return population
+    
+    def normalise_population_at(self, species, t):
+        """
+        normalises the dynamics of species (e.g. model.S1) at time t
+        """
+        idx = np.where((self.t-t)**2 == min((self.t-t)**2))[0][0]
+        factor = species[idx]
+        species = species/factor
+        return species, factor
+    
+    
+class Simple3StateModel(object):
+    """
+    Very simple model. No magnetic stuff. Just S1, TT and T1, including both a
+    linear and bimolecular triplet recombination channel. Not very realistic.
+    """
+    
+    def __init__(self):
+        self._define_default_parameters()
+    
+    def _define_default_parameters(self):
+        """
+        Set some arbitrary values to begin with.
+        """
+        # generation of photoexcited singlet to model IRF
+        self.kGEN = 0.25
+        # rates between excited states
+        self.kSF = 20.0
+        self.k_SF = 0.03
+        self.kHOP = 0.067
+        self.k_HOP = 2.5e-4
+        self.kTTA = 1e-18
+        # rates of decay
+        self.kSNR = 0.1
+        self.kSSA = 0
+        self.kTTNR = 0.067
+        self.kTNR = 1e-5
+        # initial population (arb.)
+        self.GS_0 = 8e17
+        self.initial_species = 'singlet'
+        # time axis
+        self.t = np.logspace(-5, 5, 10000)
+        
+    def _set_generation_rates(self):
+        """
+        Can either start with population in S1 or T1.
+        """
+        if self.initial_species == 'singlet':
+            self.kGENS = self.kGEN
+            self.kGENT = 0
+        elif self.initial_species == 'triplet':
+            self.kGENS = 0
+            self.kGENT = self.kGEN
+        else:
+            raise ValueError('initial_species attribute must be either \'singlet\' or \'triplet\'')
+
+    def _rate_equations(self, t, y):
+        """
+        This function sets the rate equations in the format required by 
+        scipy.integrate.odeint
+        """
+        GS, S1, TT, T1 = y
+        dydt = np.zeros(len(y))
+        # GS
+        dydt[0] = -(self.kGENS+self.kGENT)*GS
+        # S1
+        dydt[1] = self.kGENS*GS - (self.kSNR+self.kSF)*S1 - self.kSSA*S1*S1 + self.k_SF*TT
+        # TT
+        dydt[2] = self.kSF*S1 - (self.k_SF+self.kTTNR+self.kHOP)*TT + self.k_HOP*T1 + self.kTTA*T1**2
+        # T1
+        dydt[3] = self.kGENT*GS + self.kHOP*TT - 2.0*self.kTTA*T1**2 - (self.kTNR+2*self.k_HOP)*T1
+        #
+        return dydt
+    
+    def simulate(self):
+        """ 
+        This simulates all population dynamics
+        """
+        self._set_generation_rates()
+        y0 = np.array([self.GS_0, 0, 0, 0])
+        y = odeint(lambda y, t: self._rate_equations(t, y), y0, self.t)
+        self._unpack_simulation(y)
+
+    def _unpack_simulation(self, y):
+        """
+        This is called by model.simulate - it populates species attributes 
+        with numpy arrays which are the population dynamics
+        """
+        self.GS = y[:, 0]
+        self.S1 = y[:, 1]
+        self.TT = y[:, 2]
+        self.T1 = y[:, 3]
+        
+    def get_population_between(self, species, t1, t2):
+        """
+        integrates the dynamics of species (e.g. model.S1) 
+        between times t1 and t2
+        """
+        mask = ((self.t >= t1) & (self.t <= t2))
+        t = self.t[mask]
+        population = np.trapz(species[mask], x=t)/(t2-t1)
+        return population
+    
+    def normalise_population_at(self, species, t):
+        """
+        normalises the dynamics of species (e.g. model.S1) at time t
+        """
+        idx = np.where((self.t-t)**2 == min((self.t-t)**2))[0][0]
+        factor = species[idx]
+        species = species/factor
+        return species, factor
+
+
+class Merrifield(object):
+    """
+    The standard Merrifield model.
+    """
+    
+    def __init__(self):
+        self._define_default_parameters()
+    
+    def _define_default_parameters(self):
+        """
+        Set some arbitrary values to begin with.
+        """
+        # generation of photoexcited singlet to model IRF
+        self.kGEN = 0.25
+        # rates between excited states
+        self.kSF = 20.0
+        self.k_SF = 0.03
+        self.kDISS = 0.067
+        self.kTTA = 1e-18
+        # spin relaxation (Bardeen addition - not in original Merrifield)
+        self.kRELAX = 0
+        # rates of decay
+        self.kSNR = 0.1
+        self.kSSA = 0
+        self.kTTNR = 0.067
+        self.kTNR = 1e-5
+        # initial population (per cm-3)
+        self.GS_0 = 8e17
+        self.initial_species = 'singlet'
+        # time axis
+        self.t = np.logspace(-5, 5, 10000)
+        
+    def _set_generation_rates(self):
+        """
+        Can either start with population in S1 or T1.
+        """
+        if self.initial_species == 'singlet':
+            self.kGENS = self.kGEN
+            self.kGENT = 0
+        elif self.initial_species == 'triplet':
+            self.kGENS = 0
+            self.kGENT = self.kGEN
+        else:
+            raise ValueError('initial_species attribute must be either \'singlet\' or \'triplet\'')
+
+    def _rate_equations(self, t, y, cslsq):
+        """
+        This function sets the rate equations in the format required by 
+        scipy.integrate.odeint
+        
+        It takes the Cs overlap values as an argument
+        """
+        GS, S1, TT_1, TT_2, TT_3, TT_4, TT_5, TT_6, TT_7, TT_8, TT_9, T1 = y
+        dydt = np.zeros(len(y))
+        # GS
+        dydt[0] = -(self.kGENS+self.kGENT)*GS
+        # S1
+        dydt[1] = self.kGENS*GS - (self.kSNR+self.kSF*np.sum(cslsq))*S1 -self.kSSA*S1*S1+ self.k_SF*(cslsq[0]*TT_1+cslsq[1]*TT_2+cslsq[2]*TT_3+cslsq[3]*TT_4+cslsq[4]*TT_5+cslsq[5]*TT_6+cslsq[6]*TT_7+cslsq[7]*TT_8+cslsq[8]*TT_9)
+        # TT_1
+        dydt[2] = self.kSF*cslsq[0]*S1 - (self.k_SF*cslsq[0]+self.kDISS+self.kTTNR+self.kRELAX)*TT_1 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_2+TT_3+TT_4+TT_5+TT_6+TT_7+TT_8+TT_9)
+        # TT_2
+        dydt[3] = self.kSF*cslsq[1]*S1 - (self.k_SF*cslsq[1]+self.kDISS+self.kTTNR+self.kRELAX)*TT_2 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_3+TT_4+TT_5+TT_6+TT_7+TT_8+TT_9)
+        # TT_3
+        dydt[4] = self.kSF*cslsq[2]*S1 - (self.k_SF*cslsq[2]+self.kDISS+self.kTTNR+self.kRELAX)*TT_3 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_4+TT_5+TT_6+TT_7+TT_8+TT_9)
+        # TT_4
+        dydt[5] = self.kSF*cslsq[3]*S1 - (self.k_SF*cslsq[3]+self.kDISS+self.kTTNR+self.kRELAX)*TT_4 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_5+TT_6+TT_7+TT_8+TT_9)
+        # TT_5
+        dydt[6] = self.kSF*cslsq[4]*S1 - (self.k_SF*cslsq[4]+self.kDISS+self.kTTNR+self.kRELAX)*TT_5 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_4+TT_6+TT_7+TT_8+TT_9)
+        # TT_6
+        dydt[7] = self.kSF*cslsq[5]*S1 - (self.k_SF*cslsq[5]+self.kDISS+self.kTTNR+self.kRELAX)*TT_6 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_4+TT_5+TT_7+TT_8+TT_9)
+        # TT_7
+        dydt[8] = self.kSF*cslsq[6]*S1 - (self.k_SF*cslsq[6]+self.kDISS+self.kTTNR+self.kRELAX)*TT_7 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_4+TT_5+TT_6+TT_8+TT_9)
+        # TT_8
+        dydt[9] = self.kSF*cslsq[7]*S1 - (self.k_SF*cslsq[7]+self.kDISS+self.kTTNR+self.kRELAX)*TT_8 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_4+TT_5+TT_6+TT_7+TT_9)
+        # TT_9
+        dydt[10] = self.kSF*cslsq[8]*S1 - (self.k_SF*cslsq[8]+self.kDISS+self.kTTNR+self.kRELAX)*TT_9 + (1/9)*self.kTTA*T1*T1 + (1/8)*self.kRELAX*(TT_1+TT_2+TT_3+TT_4+TT_5+TT_6+TT_7+TT_8)
+        # T1
+        dydt[11] = self.kGENT*GS + 2.0*self.kDISS*(TT_1+TT_2+TT_3+TT_4+TT_5+TT_6+TT_7+TT_8+TT_9) - 2.0*self.kTTA*T1*T1 - self.kTNR*T1
+        #
+        return dydt
+    
+    def simulate(self, cslsq):
+        """
+        Given an array of 9 cslsq calues (output from SpinHamiltonian class) 
+        this simulates all population dynamics
+        """
+        self._set_generation_rates()
+        y0 = np.array([self.GS_0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        y = odeint(lambda y, t: self._rate_equations(t, y, cslsq), y0, self.t)
+        self._unpack_simulation(y, cslsq)
+
+    def _unpack_simulation(self, y, cslsq):
+        """
+        This is called by model.simulate - it populates species attributes 
+        with numpy arrays which are the population dynamics
+        """
+        self.GS = y[:, 0]
+        self.S1 = y[:, 1]
+        self.TT_bright = cslsq[0]*y[:, 2] + cslsq[1]*y[:, 3] + cslsq[2]*y[:, 4] + cslsq[3]*y[:, 5] + cslsq[4]*y[:, 6] + cslsq[5]*y[:, 7] + cslsq[6]*y[:, 8] + cslsq[7]*y[:, 9] + cslsq[8]*y[:, 10]
+        self.TT_total = np.sum(y[:, 2:11], axis=1)
+        self.T_T_total = np.sum(y[:, 11:-1], axis=1)
+        self.T1 = y[:, -1]
+        
+    def get_population_between(self, species, t1, t2):
+        """
+        integrates the dynamics of species (e.g. model.S1) 
+        between times t1 and t2
+        """
+        mask = ((self.t >= t1) & (self.t <= t2))
+        t = self.t[mask]
+        population = np.trapz(species[mask], x=t)/(t2-t1)
+        return population
+    
+    def normalise_population_at(self, species, t):
+        """
+        normalises the dynamics of species (e.g. model.S1) at time t
+        """
+        idx = np.where((self.t-t)**2 == min((self.t-t)**2))[0][0]
+        factor = species[idx]
+        species = species/factor
+        return species, factor
+        
+        
+
+class Bardeen(object):
+    """
+    Variation of Merrifield model presented by Bardeen and co-workers. It is
+    valid at low fluence (no TTA) and adds triplet diffusion in a crude
+    fashion.
+    """
+    
+    def __init__(self):
+        self._define_default_parameters()
+    
+    def _define_default_parameters(self):
+        """
+        Set some arbitrary values to begin with.
+        """
+        # generation of photoexcited singlet to model IRF
+        self.kGEN = 0.25
+        # rates between excited states
+        self.kSF = 20.0
+        self.k_SF = 0.03
+        self.kHOP = 0.067
+        self.k_HOP = 2.5e-4
+        # spin relaxation
+        self.kRELAX = 0.033
+        # rates of decay
+        self.kSNR = 0.1
+        self.kSSA =0
+        self.kTTNR = 0.067
+        self.kSPIN = 2.5e-4
+        # initial population (arb.)
+        self.GS_0 = 1
+        # bright threshold: if |Cs|^2 > threshold TT state is considered bright
+        self.bright_threshold = 1e-4
+        # time axis
+        self.t = np.logspace(-5, 5, 10000)
+
+    def _rate_equations(self, t, y, cslsq):
+        """
+        This function sets the rate equations in the format required by 
+        scipy.integrate.odeint
+        
+        It takes the Cs overlap values as an argument
+        """
+        GS, S1, TT_1, TT_2, TT_3, TT_4, TT_5, TT_6, TT_7, TT_8, TT_9, T_T_1, T_T_2, T_T_3, T_T_4, T_T_5, T_T_6, T_T_7, T_T_8, T_T_9 = y
+        dydt = np.zeros(len(y))
+        # GS
+        dydt[0] = -self.kGEN*GS
+        # S1
+        dydt[1] = self.kGEN*GS - (self.kSNR+self.kSF*np.sum(cslsq))*S1 -self.kSSA*S1*S1 + self.k_SF*(cslsq[0]*TT_1+cslsq[1]*TT_2+cslsq[2]*TT_3+cslsq[3]*TT_4+cslsq[4]*TT_5+cslsq[5]*TT_6+cslsq[6]*TT_7+cslsq[7]*TT_8+cslsq[8]*TT_9)
+        # TT_1
+        dydt[2] = self.kSF*cslsq[0]*S1 - (self.k_SF+self.kTTNR)*cslsq[0]*TT_1 - self.kHOP*TT_1 + self.k_HOP*T_T_1
+        # TT_2
+        dydt[3] = self.kSF*cslsq[1]*S1 - (self.k_SF+self.kTTNR)*cslsq[1]*TT_2 - self.kHOP*TT_2 + self.k_HOP*T_T_2
+        # TT_3
+        dydt[4] = self.kSF*cslsq[2]*S1 - (self.k_SF+self.kTTNR)*cslsq[2]*TT_3 - self.kHOP*TT_3 + self.k_HOP*T_T_3
+        # TT_4
+        dydt[5] = self.kSF*cslsq[3]*S1 - (self.k_SF+self.kTTNR)*cslsq[3]*TT_4 - self.kHOP*TT_4 + self.k_HOP*T_T_4
+        # TT_5
+        dydt[6] = self.kSF*cslsq[4]*S1 - (self.k_SF+self.kTTNR)*cslsq[4]*TT_5 - self.kHOP*TT_5 + self.k_HOP*T_T_5
+        # TT_6
+        dydt[7] = self.kSF*cslsq[5]*S1 - (self.k_SF+self.kTTNR)*cslsq[5]*TT_6 - self.kHOP*TT_6 + self.k_HOP*T_T_6
+        # TT_7
+        dydt[8] = self.kSF*cslsq[6]*S1 - (self.k_SF+self.kTTNR)*cslsq[6]*TT_7 - self.kHOP*TT_7 + self.k_HOP*T_T_7
+        # TT_8
+        dydt[9] = self.kSF*cslsq[7]*S1 - (self.k_SF+self.kTTNR)*cslsq[7]*TT_8 - self.kHOP*TT_8 + self.k_HOP*T_T_8
+        # TT_9
+        dydt[10] = self.kSF*cslsq[8]*S1 - (self.k_SF+self.kTTNR)*cslsq[8]*TT_9 - self.kHOP*TT_9 + self.k_HOP*T_T_9
+        # T_T_1
+        dydt[11] = self.kHOP*TT_1 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_1 + (1/8)*self.kRELAX*(T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_2
+        dydt[12] = self.kHOP*TT_2 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_2 + (1/8)*self.kRELAX*(T_T_1+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_3
+        dydt[13] = self.kHOP*TT_3 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_3 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_4
+        dydt[14] = self.kHOP*TT_4 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_4 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_5+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_5
+        dydt[15] = self.kHOP*TT_5 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_5 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_6+T_T_7+T_T_8+T_T_9)
+        # T_T_6
+        dydt[16] = self.kHOP*TT_6 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_6 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_7+T_T_8+T_T_9)
+        # T_T_7
+        dydt[17] = self.kHOP*TT_7 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_7 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_8+T_T_9)
+        # T_T_8
+        dydt[18] = self.kHOP*TT_8 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_8 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_9)
+        # T_T_9
+        dydt[19] = self.kHOP*TT_9 - (self.k_HOP+self.kSPIN+self.kRELAX)*T_T_9 + (1/8)*self.kRELAX*(T_T_1+T_T_2+T_T_3+T_T_4+T_T_5+T_T_6+T_T_7+T_T_8)
+        #
+        return dydt
+    
+    def simulate(self, cslsq):
+        """
+        Given an array of 9 cslsq calues (output from SpinHamiltonian class) 
+        this simulates all population dynamics
+        """
+        y0 = np.array([self.GS_0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        y = odeint(lambda y, t: self._rate_equations(t, y, cslsq), y0, self.t)
+        self._unpack_simulation(y, cslsq)
+
+    def _unpack_simulation(self, y, cslsq):
+        """
+        This is called by model.simulate - it populates species attributes 
+        with numpy arrays which are the population dynamics
+        """
+        self.GS = y[:, 0]
+        self.S1 = y[:, 1]
+        self.TT_bright = cslsq[0]*y[:, 2] + cslsq[1]*y[:, 3] + cslsq[2]*y[:, 4] + cslsq[3]*y[:, 5] + cslsq[4]*y[:, 6] + cslsq[5]*y[:, 7] + cslsq[6]*y[:, 8] + cslsq[7]*y[:, 9] + cslsq[8]*y[:, 10]
+        self.TT_total = np.sum(y[:, 2:11], axis=1)
+        self.T_T_total = np.sum(y[:, 11:], axis=1)
+        
+    def get_population_between(self, species, t1, t2):
+        """
+        integrates the dynamics of species (e.g. model.S1) 
+        between times t1 and t2
+        """
+        mask = ((self.t >= t1) & (self.t <= t2))
+        t = self.t[mask]
+        population = np.trapz(species[mask], x=t)/(t2-t1)
+        return population
+    
+    def normalise_population_at(self, species, t):
+        """
+        normalises the dynamics of species (e.g. model.S1) at time t
+        """
         idx = np.where((self.t-t)**2 == min((self.t-t)**2))[0][0]
         factor = species[idx]
         species = species/factor

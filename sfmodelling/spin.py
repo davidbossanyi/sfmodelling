@@ -1,24 +1,24 @@
-'''
+"""
 Contains the class SpinHamiltonian. This class can be used to calculate the
 overlaps of the triplet pair wavefunctions with the singlet triplet pair.
 These are then the cslsq inputs for the rate models in models.py.
 
-Version 2.0
-David Bossanyi 12/08/2019
-dgbossanyi1@sheffield.ac.uk
-'''
+The Hamiltonian is constructed following the procedure described by Tapping
+and Huang (https://doi.org/10.1021/acs.jpcc.6b04934).
+"""
 
 import numpy as np
 import os
 
 
 class SpinHamiltonian(object):
-    '''
+    """
     ABOUT
+    ---------------------------------------------------------------------------
     A class containing methods for calculating and using the total spin
-    Hamiltonian for triplet pair states.
+    Hamiltonian for triplet-pair states (T..T).
     
-    The Hamiltonian is the sum of the Zeeman, Zero-Field and dipole-dipole 
+    The Hamiltonian is the sum of the Zeeman, zero-field and dipole-dipole 
     terms.
     
     The class includes methods to compute the eigenstates and eigenvalues of
@@ -27,21 +27,23 @@ class SpinHamiltonian(object):
     
     The |Cs|^2 can be computed for a specific triplet pair orientation with
     respect to the B-field, or for random triplet pair orientation, in which
-    case the program samples 10^4 possible orientations and takes the average.
-    Note that for simulating fluorescence, any averaging should be done AFTER
+    case the method samples many possible orientations and takes the average.
+    Note that for simulating dynamics, any averaging should be done AFTER
     computing the fluorescence for EACH possible set of |Cs| values.
     
-    Methods do exactly what they say on the tin.
-    
     USAGE
+    ---------------------------------------------------------------------------
     The D, E, and dipole-dipole interaction parameters can be adjusted as
-    required using, for example:
+    required, for example:
     
-    >>> SpinHamiltonian.D = 5.1e-6
-    >>> SpinHamiltonian.E = 1.6e-7
-    >>> SpinHamiltonian.X = 1.1e-9
+    >>> sh = SpinHamiltonian()
+    >>> sh.D = 5.1e-6
+    >>> sh.E = 1.6e-7
+    >>> sh.X = 1.1e-9
+    >>> sh.rAB = (0.7636, -0.4460, 0.4669)
     
     DETAILS
+    ---------------------------------------------------------------------------
     uses constants:
         hbar = 1
     uses units:
@@ -50,7 +52,10 @@ class SpinHamiltonian(object):
         energy: electronvolt 
     uses zero-field basis states:
         (x,x) (x,y) (x,z) (y,x) (y,y) (y,z) (z,x) (z,y) (z,z)
-    '''
+    uses Euler angle convention:
+        ZX'Z''
+    """
+    
     def __init__(self):
         self._set_constants()
         self._initialise_magnetic_parameters()
@@ -61,9 +66,9 @@ class SpinHamiltonian(object):
         self.g = 2.002        # electron gyromagnetic ratio
         
     def _initialise_magnetic_parameters(self):
-        self.D = 6.45e-5  # D parameter in eV from Bayliss PRL 2014 (TIPS-Tc)
-        self.E = -6.45e-6   # E parameter in eV
-        self.X = self.D/100   # intertriplet dipole-dipole interaction in eV
+        self.D = 1e-6  # D parameter in eV from Bayliss PRL 2014 (TIPS-Tc)
+        self.E = 3e-6   # E parameter in eV
+        self.X = 6e-8   # intertriplet dipole-dipole interaction in eV
         self.rAB = (0, 0, 1)  # unit vector from COM of A to COM of B in A coordinates
     
     def _set_singlet_state(self):
@@ -72,10 +77,10 @@ class SpinHamiltonian(object):
         
     @staticmethod    
     def _rotation_matrix(alpha, beta, gamma):
-        '''
-        computes the 3x3 rotation matrix using the Euler angles that would
-        rotate molecule A onto molecule B according to the zx'z'' convention
-        '''
+        """
+        Computes the 3x3 rotation matrix using the Euler angles that would
+        rotate molecule A onto molecule B according to the zx'z'' convention.
+        """
         R = np.array([[ np.cos(alpha)*np.cos(gamma)-np.sin(alpha)*np.cos(beta)*np.sin(gamma),  np.sin(alpha)*np.cos(gamma)+np.cos(alpha)*np.cos(beta)*np.sin(gamma), np.sin(beta)*np.sin(gamma)],
                       [-np.cos(alpha)*np.sin(gamma)-np.sin(alpha)*np.cos(beta)*np.cos(gamma), -np.sin(alpha)*np.sin(gamma)+np.cos(alpha)*np.cos(beta)*np.cos(gamma), np.sin(beta)*np.cos(gamma)],
                       [ np.sin(alpha)*np.sin(beta)                                          , -np.cos(alpha)*np.sin(beta)                                          , np.cos(beta)              ]])
@@ -160,12 +165,32 @@ class SpinHamiltonian(object):
         return TTl_eigenvalues, TTl_eigenstates
         
     def calculate_overlap_specific_orientation(self, B, theta, phi, alpha, beta, gamma):
+        """
+        This should be used for any simulations actual measured data. If
+        simulations of polycrystalline or amorphous materials are required,
+        angles should be iterated over as appropriate and averaging done
+        afterwards. B is the magnetic field strength in Tesla, theta and phi
+        describe the orientation of the B-vector with respect to the coordinate
+        system of molecule A and alpha, beta and gamma are Euler angles that
+        rotate molecule A onto molecule B. All angles in radians.
+        """
         TTl_eigenvalues, TTl_eigenstates = self.calculate_TTl_states(B, theta, phi, alpha, beta, gamma)
         overlap = np.matmul(self.S_state, TTl_eigenstates)
         Cslsq = np.abs(overlap)**2
         return Cslsq
     
-    def calculate_overlap_semirandom_orientation(self, B, alpha, beta, gamma, density=10, tofile=True):
+    def calculate_overlap_semirandom_orientation(self, B, alpha, beta, gamma, density=10, tofile=False):
+        """
+        This should ONLY be used for illustrative purposes. If simulations 
+        of polycrystalline or amorphous materials are required, angles should 
+        be iterated over as appropriate and averaging doneafterwards. 
+        B is the magnetic field strength in Tesla, theta and phi  describe the 
+        orientation of the B-vector with respect to the coordinate system of 
+        molecule A and alpha, beta and gamma are Euler angles that rotate
+        molecule A onto molecule B. All angles in radians. Density gives the
+        number of angles to sample for each given angle. If tofile is set to
+        True, the calculated values are saved.
+        """
         theta_range = np.linspace(0, np.pi, density)
         phi_range = np.linspace(0, 2*np.pi, density)
         Cslsq = np.zeros((len(theta_range)*len(phi_range), 9))
@@ -181,7 +206,18 @@ class SpinHamiltonian(object):
         Cslsq = Cslsq.mean(axis=0)
         return Cslsq
     
-    def calculate_overlap_random_orientation(self, B, density=10, tofile=True):
+    def calculate_overlap_random_orientation(self, B, density=10, tofile=False):
+        """
+        This should ONLY be used for illustrative purposes. If simulations 
+        of polycrystalline or amorphous materials are required, angles should 
+        be iterated over as appropriate and averaging doneafterwards. 
+        B is the magnetic field strength in Tesla, theta and phi  describe the 
+        orientation of the B-vector with respect to the coordinate system of 
+        molecule A and alpha, beta and gamma are Euler angles that rotate
+        molecule A onto molecule B. All angles in radians. Density gives the
+        number of angles to sample for each given angle. If tofile is set to
+        True, the calculated values are saved.
+        """
         theta_range = np.linspace(0, np.pi, density)
         phi_range = np.linspace(0, 2*np.pi, density)
         Cslsq = np.zeros((len(theta_range)**2*len(phi_range)**3, 9))
