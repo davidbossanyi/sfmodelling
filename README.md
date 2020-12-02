@@ -1,6 +1,6 @@
 # sfmodelling
 
-This repository contains the code necessary to reproduce the kinetic modelling of diftes and pentacene PL dynamics in the article **Emissive spin-0 triplet-pairs are a direct product of triplet-triplet annihilation in pentacene single crystals and anthradithiophene films** by Bossanyi et al.
+This repository contains the code necessary to reproduce the kinetic modelling of diftes and pentacene PL dynamics in the article **Emissive spin-0 triplet-pairs are a direct product of triplet-triplet annihilation in pentacene single crystals and anthradithiophene films** by Bossanyi et al. You can read the paper [here](https://www.nature.com/articles/s41557-020-00593-y).
 
 ### Requirements
 - python
